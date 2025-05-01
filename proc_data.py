@@ -15,12 +15,12 @@ import xarray as xr
 import pandas as pd
 import os
 import os
-os.makedirs('RawData/LSTM', exist_ok=True)
-os.makedirs('RawData/LSTM-RD', exist_ok=True)
-os.makedirs('RawData/LSTM-RDD', exist_ok=True)
+os.makedirs('ProcData/LSTM', exist_ok=True)
+os.makedirs('ProcData/LSTM-RD', exist_ok=True)
+os.makedirs('ProcData/LSTM-RDD', exist_ok=True)
 
 # Ensure metrics files do not already exist
-metrics_files = ['RawData/LSTM/lstm_metrics.txt', 'RawData/LSTM-RD/lstm_rd_metrics.txt', 'RawData/LSTM-RDD/lstm_rdd_metrics.txt']
+metrics_files = ['ProcData/LSTM/lstm_metrics.txt', 'ProcData/LSTM-RD/lstm_rd_metrics.txt', 'ProcData/LSTM-RDD/lstm_rdd_metrics.txt']
 for file in metrics_files:
     if os.path.exists(file):
         os.remove(file)
@@ -46,8 +46,18 @@ df3.drop("latitude",axis=1,inplace=True)
 df3.drop("longitude",axis=1,inplace=True)
 df3 = df3.set_index("time")
 
+#Normalize data
+mean = df3[:int(len(df3) * 0.7)].mean(axis=0)
+df3 -= mean
+std = df3[:int(len(df3) * 0.7)].std(axis=0)
+df3 /= std
+
+print(mean)
+print(std)
+
 data = pd.date_range(start='2016-01-01', end='2021-11-15', freq='D')
 data = df3.reindex(data)
+data.interpolate(method='ffill', inplace=True)
 
 data.dropna(inplace=True)
 
@@ -110,14 +120,16 @@ for i in range(10):
 
     # Evaluate the model on the test dataset using the best epoch's weights
     loss, mae = model.evaluate(test_dataset)
-    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae}')#*std.mean()}')
+    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae*std.mean()}')
 
     # Store the metrics for the best epoch
-    with open(f'RawData/LSTM/lstm_metrics.txt', 'a') as f:
-        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}\n')
+    with open(f'ProcData/LSTM/lstm_metrics.txt', 'a') as f:
+        denormalized_loss = loss * std.mean() * std.mean()
+        denormalized_mae = mae * std.mean()
+        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}, Denormalized Loss: {denormalized_loss}, Denormalized MAE: {denormalized_mae}\n')
 
-    loss = np.array(history.history["mae"]) #* std.mean()
-    val_loss = np.array(history.history["val_mae"]) #* std.mean()
+    loss = np.array(history.history["mae"]) * std.mean()
+    val_loss = np.array(history.history["val_mae"]) * std.mean()
     epochs = range(1, len(loss) + 1)
     plt.figure()
     plt.plot(epochs, loss, "bo", label="Train MAE")
@@ -128,7 +140,7 @@ for i in range(10):
     plt.ylabel('MAE')
     plt.legend()
     #plt.show()
-    plt.savefig(f'RawData/LSTM/lstm{i}_mae_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM/lstm{i}_mae_proc.pdf', format="pdf", bbox_inches="tight")
 
     # Make predictions
     predictions = model.predict(test_dataset)
@@ -142,10 +154,10 @@ for i in range(10):
     true_values = np.array(true_values)
 
     # Denormalize the predicted values
-    predictions = predictions #* np.array(std) + np.array(mean)
+    predictions = predictions * np.array(std) + np.array(mean)
 
     # Denormalize the true values
-    true_values = true_values #* np.array(std) + np.array(mean)
+    true_values = true_values * np.array(std) + np.array(mean)
 
     # Create subplots for Eastward and Northward wind
     fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
@@ -167,36 +179,51 @@ for i in range(10):
 
     # Save the figure
     plt.tight_layout()
-    plt.savefig(f'RawData/LSTM/lstm{i}_pred_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM/lstm{i}_pred_proc.pdf', format="pdf", bbox_inches="tight")
     
     # Save the model
-    model.save(f'RawData/LSTM/lstm_model_{i}.keras')
+    model.save(f'ProcData/LSTM/lstm_model_{i}.keras')
 
 # Calculate mean and std of the metrics
 metrics = []
-with open('RawData/LSTM/lstm_metrics.txt', 'r') as f:
+denormalized_metrics = []
+with open('ProcData/LSTM/lstm_metrics.txt', 'r') as f:
     for line in f:
-        parts = line.strip().split(',')
-        loss = float(parts[1].split(':')[1].strip())
-        mae = float(parts[2].split(':')[1].strip())
-        metrics.append((loss, mae))
+        if line.startswith('Execution'):
+            parts = line.strip().split(',')
+            loss = float(parts[1].split(':')[1].strip())
+            mae = float(parts[2].split(':')[1].strip())
+            denormalized_loss = float(parts[3].split(':')[1].strip())
+            denormalized_mae = float(parts[4].split(':')[1].strip())
+            metrics.append((loss, mae))
+            denormalized_metrics.append((denormalized_loss, denormalized_mae))
 
 losses, maes = zip(*metrics)
+denorm_losses, denorm_maes = zip(*denormalized_metrics)
+
 mean_loss = np.mean(losses)
 std_loss = np.std(losses)
 mean_mae = np.mean(maes)
 std_mae = np.std(maes)
 
+mean_denorm_loss = np.mean(denorm_losses)
+mean_denorm_mae = np.mean(denorm_maes)
+
 # Find the best execution regarding the mae
 best_execution_index = np.argmin(maes)
 best_loss = losses[best_execution_index]
 best_mae = maes[best_execution_index]
+best_denorm_loss = denorm_losses[best_execution_index]
+best_denorm_mae = denorm_maes[best_execution_index]
 
-# Store the mean and std in the file
-with open('RawData/LSTM/lstm_metrics.txt', 'a') as f:
+# Store the mean, std, and denormalized metrics in the file
+with open('ProcData/LSTM/lstm_metrics.txt', 'a') as f:
     f.write(f'\nMean Loss: {mean_loss}, Std Loss: {std_loss}\n')
     f.write(f'Mean MAE: {mean_mae}, Std MAE: {std_mae}\n')
+    f.write(f'Mean Denormalized Loss: {mean_denorm_loss}, Mean Denormalized MAE: {mean_denorm_mae}\n')
+    f.write(f'Std Denormalized Loss: {np.std(denorm_losses)}, Std Denormalized MAE: {np.std(denorm_maes)}\n')
     f.write(f'Best Execution: {best_execution_index}, Best Loss: {best_loss}, Best MAE: {best_mae}\n')
+    f.write(f'Best Denormalized Loss: {best_denorm_loss}, Best Denormalized MAE: {best_denorm_mae}\n')
 
 #LSTM-RD
 keras.utils.set_random_seed(812)
@@ -222,14 +249,16 @@ for i in range(10):
 
     # Evaluate the model on the test dataset using the best epoch's weights
     loss, mae = model.evaluate(test_dataset)
-    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae}')#*std.mean()}')
+    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae*std.mean()}')
 
     # Store the metrics for the best epoch
-    with open(f'RawData/LSTM-RD/lstm_rd_metrics.txt', 'a') as f:
-        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}\n')
+    with open(f'ProcData/LSTM-RD/lstm_rd_metrics.txt', 'a') as f:
+        denormalized_loss = loss * std.mean() * std.mean()
+        denormalized_mae = mae * std.mean()
+        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}, Denormalized Loss: {denormalized_loss}, Denormalized MAE: {denormalized_mae}\n')
     
-    loss = np.array(history.history["mae"]) #* std.mean()
-    val_loss = np.array(history.history["val_mae"]) #* std.mean()
+    loss = np.array(history.history["mae"]) * std.mean()
+    val_loss = np.array(history.history["val_mae"]) * std.mean()
     epochs = range(1, len(loss) + 1)
     plt.figure()
     plt.plot(epochs, loss, "bo", label="Train MAE")
@@ -240,7 +269,7 @@ for i in range(10):
     plt.ylabel('MAE')
     plt.legend()
     #plt.show()
-    plt.savefig(f'RawData/LSTM-RD/lstm_rd{i}_mae_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM-RD/lstm_rd{i}_mae_proc.pdf', format="pdf", bbox_inches="tight")
 
     # Make predictions
     predictions = model.predict(test_dataset)
@@ -254,10 +283,10 @@ for i in range(10):
     true_values = np.array(true_values)
 
     # Denormalize the predicted values
-    predictions = predictions #* np.array(std) + np.array(mean)
+    predictions = predictions * np.array(std) + np.array(mean)
 
     # Denormalize the true values
-    true_values = true_values #* np.array(std) + np.array(mean)
+    true_values = true_values * np.array(std) + np.array(mean)
 
     # Create subplots for Eastward and Northward wind
     fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
@@ -279,37 +308,52 @@ for i in range(10):
 
     # Save the figure
     plt.tight_layout()
-    plt.savefig(f'RawData/LSTM-RD/lstm_rd{i}_pred_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM-RD/lstm_rd{i}_pred_proc.pdf', format="pdf", bbox_inches="tight")
 
     # Save the model
-    model.save(f'RawData/LSTM-RD/lstm_rd_model_{i}.keras')
+    model.save(f'ProcData/LSTM-RD/lstm_rd_model_{i}.keras')
 
 # Calculate mean and std of the metrics
 metrics = []
-with open('RawData/LSTM-RD/lstm_rd_metrics.txt', 'r') as f:
+denormalized_metrics = []
+with open('ProcData/LSTM-RD/lstm_rd_metrics.txt', 'r') as f:
     for line in f:
-        parts = line.strip().split(',')
-        loss = float(parts[1].split(':')[1].strip())
-        mae = float(parts[2].split(':')[1].strip())
-        metrics.append((loss, mae))
+        if line.startswith('Execution'):
+            parts = line.strip().split(',')
+            loss = float(parts[1].split(':')[1].strip())
+            mae = float(parts[2].split(':')[1].strip())
+            denormalized_loss = float(parts[3].split(':')[1].strip())
+            denormalized_mae = float(parts[4].split(':')[1].strip())
+            metrics.append((loss, mae))
+            denormalized_metrics.append((denormalized_loss, denormalized_mae))
 
 losses, maes = zip(*metrics)
+denorm_losses, denorm_maes = zip(*denormalized_metrics)
+
 mean_loss = np.mean(losses)
 std_loss = np.std(losses)
 mean_mae = np.mean(maes)
 std_mae = np.std(maes)
-    
+
+mean_denorm_loss = np.mean(denorm_losses)
+mean_denorm_mae = np.mean(denorm_maes)
+
 # Find the best execution regarding the mae
 best_execution_index = np.argmin(maes)
 best_loss = losses[best_execution_index]
 best_mae = maes[best_execution_index]
+best_denorm_loss = denorm_losses[best_execution_index]
+best_denorm_mae = denorm_maes[best_execution_index]
 
-# Store the mean and std in the file
-with open('RawData/LSTM-RD/lstm_rd_metrics.txt', 'a') as f:
+# Store the mean, std, and denormalized metrics in the file
+with open('ProcData/LSTM-RD/lstm_rd_metrics.txt', 'a') as f:
     f.write(f'\nMean Loss: {mean_loss}, Std Loss: {std_loss}\n')
     f.write(f'Mean MAE: {mean_mae}, Std MAE: {std_mae}\n')
+    f.write(f'Mean Denormalized Loss: {mean_denorm_loss}, Mean Denormalized MAE: {mean_denorm_mae}\n')
+    f.write(f'Std Denormalized Loss: {np.std(denorm_losses)}, Std Denormalized MAE: {np.std(denorm_maes)}\n')
     f.write(f'Best Execution: {best_execution_index}, Best Loss: {best_loss}, Best MAE: {best_mae}\n')
-    
+    f.write(f'Best Denormalized Loss: {best_denorm_loss}, Best Denormalized MAE: {best_denorm_mae}\n')
+
 
 # LSTM-RDD
 keras.utils.set_random_seed(812)
@@ -336,14 +380,16 @@ for i in range(10):
 
     # Evaluate the model on the test dataset using the best epoch's weights
     loss, mae = model.evaluate(test_dataset)
-    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae}')#*std.mean()}')
+    print(f'Test Loss {i}: {loss}, Test MAE {i}: {mae*std.mean()}')
 
     # Store the metrics for the best epoch
-    with open(f'RawData/LSTM-RDD/lstm_rdd_metrics.txt', 'a') as f:
-        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}\n')
+    with open(f'ProcData/LSTM-RDD/lstm_rdd_metrics.txt', 'a') as f:
+        denormalized_loss = loss * std.mean() * std.mean()
+        denormalized_mae = mae * std.mean()
+        f.write(f'Execution {i}: Best Epoch: {best_epoch}, Test Loss: {loss}, Test MAE: {mae}, Denormalized Loss: {denormalized_loss}, Denormalized MAE: {denormalized_mae}\n')
 
-    loss = np.array(history.history["mae"])# * std.mean()
-    val_loss = np.array(history.history["val_mae"])# * std.mean()
+    loss = np.array(history.history["mae"]) * std.mean()
+    val_loss = np.array(history.history["val_mae"]) * std.mean()
     epochs = range(1, len(loss) + 1)
     plt.figure()
     plt.plot(epochs, loss, "bo", label="Train MAE")
@@ -354,7 +400,7 @@ for i in range(10):
     plt.ylabel('MAE')
     plt.legend()
     #plt.show()
-    plt.savefig(f'RawData/LSTM-RDD/lstm_rdd{i}_mae_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM-RDD/lstm_rdd{i}_mae_proc.pdf', format="pdf", bbox_inches="tight")
 
     # Make predictions
     predictions = model.predict(test_dataset)
@@ -368,10 +414,10 @@ for i in range(10):
     true_values = np.array(true_values)
 
     # Denormalize the predicted values
-    predictions = predictions# * np.array(std) + np.array(mean)
+    predictions = predictions * np.array(std) + np.array(mean)
 
     # Denormalize the true values
-    true_values = true_values# * np.array(std) + np.array(mean)
+    true_values = true_values * np.array(std) + np.array(mean)
 
     # Create subplots for Eastward and Northward wind
     fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
@@ -393,38 +439,50 @@ for i in range(10):
 
     # Save the figure
     plt.tight_layout()
-    plt.savefig(f'RawData/LSTM-RDD/lstm_rdd{i}_pred_raw.pdf', format="pdf", bbox_inches="tight")
+    plt.savefig(f'ProcData/LSTM-RDD/lstm_rdd{i}_pred_proc.pdf', format="pdf", bbox_inches="tight")
 
     # Save the model
-    model.save(f'RawData/LSTM-RDD/lstm_rdd_model_{i}.keras')
+    model.save(f'ProcData/LSTM-RDD/lstm_rdd_model_{i}.keras')
 
 # Calculate mean and std of the metrics
 metrics = []
-with open('RawData/LSTM-RDD/lstm_rdd_metrics.txt', 'r') as f:
+denormalized_metrics = []
+with open('ProcData/LSTM-RDD/lstm_rdd_metrics.txt', 'r') as f:
     for line in f:
-        parts = line.strip().split(',')
-        loss = float(parts[1].split(':')[1].strip())
-        mae = float(parts[2].split(':')[1].strip())
-        metrics.append((loss, mae))
+        if line.startswith('Execution'):
+            parts = line.strip().split(',')
+            loss = float(parts[1].split(':')[1].strip())
+            mae = float(parts[2].split(':')[1].strip())
+            denormalized_loss = float(parts[3].split(':')[1].strip())
+            denormalized_mae = float(parts[4].split(':')[1].strip())
+            metrics.append((loss, mae))
+            denormalized_metrics.append((denormalized_loss, denormalized_mae))
 
 losses, maes = zip(*metrics)
+denorm_losses, denorm_maes = zip(*denormalized_metrics)
+
 mean_loss = np.mean(losses)
 std_loss = np.std(losses)
 mean_mae = np.mean(maes)
 std_mae = np.std(maes)
 
+mean_denorm_loss = np.mean(denorm_losses)
+mean_denorm_mae = np.mean(denorm_maes)
+
 # Find the best execution regarding the mae
 best_execution_index = np.argmin(maes)
 best_loss = losses[best_execution_index]
 best_mae = maes[best_execution_index]
+best_denorm_loss = denorm_losses[best_execution_index]
+best_denorm_mae = denorm_maes[best_execution_index]
 
-# Store the mean, std, and best execution in the file
-with open('RawData/LSTM-RDD/lstm_rdd_metrics.txt', 'a') as f:
+# Store the mean, std, and denormalized metrics in the file
+with open('ProcData/LSTM-RDD/lstm_rdd_metrics.txt', 'a') as f:
     f.write(f'\nMean Loss: {mean_loss}, Std Loss: {std_loss}\n')
     f.write(f'Mean MAE: {mean_mae}, Std MAE: {std_mae}\n')
+    f.write(f'Mean Denormalized Loss: {mean_denorm_loss}, Mean Denormalized MAE: {mean_denorm_mae}\n')
+    f.write(f'Std Denormalized Loss: {np.std(denorm_losses)}, Std Denormalized MAE: {np.std(denorm_maes)}\n')
     f.write(f'Best Execution: {best_execution_index}, Best Loss: {best_loss}, Best MAE: {best_mae}\n')
-
-# Create a summary file for the mean, std, and denormalized metrics of the three models
-summary_file = 'RawData/mean_metrics_summary.txt'
+    f.write(f'Best Denormalized Loss: {best_denorm_loss}, Best Denormalized MAE: {best_denorm_mae}\n')
 
     
