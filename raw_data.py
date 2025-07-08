@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import os
-import os
+
 os.makedirs('RawData/LSTM', exist_ok=True)
 os.makedirs('RawData/LSTM-RD', exist_ok=True)
 os.makedirs('RawData/LSTM-RDD', exist_ok=True)

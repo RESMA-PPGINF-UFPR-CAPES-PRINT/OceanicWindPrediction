@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import os
-import os
+
 os.makedirs('ProcData/LSTM', exist_ok=True)
 os.makedirs('ProcData/LSTM-RD', exist_ok=True)
 os.makedirs('ProcData/LSTM-RDD', exist_ok=True)
